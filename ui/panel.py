@@ -1,12 +1,28 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import time
+import psutil
+import os
 
 from config import cargar_config, guardar_config
 from monitor import Monitor
 from ui.dialogo import DialogoDesbloqueo
+from ui.iconos import obtener_icono_exe
 from ui.login import VentanaContrasena, VentanaLogin
 from ui.selector import VentanaSelectorApps
+
+
+def _buscar_ruta_exe(exe: str) -> str:
+    """Intenta encontrar la ruta completa de un exe buscando en procesos activos."""
+    for proc in psutil.process_iter(["name", "exe"]):
+        try:
+            if proc.info["name"].lower() == exe:
+                ruta = proc.info.get("exe") or ""
+                if ruta and os.path.exists(ruta):
+                    return ruta
+        except Exception:
+            pass
+    return ""
 
 
 class PanelPrincipal(tk.Frame):
@@ -16,8 +32,10 @@ class PanelPrincipal(tk.Frame):
         self.pack(fill="both", expand=True)
 
         self.bloqueadas = []
-        self.desbloqueados = {}   # exe -> timestamp expiración (en segundos epoch)
+        self.desbloqueados = {}   # exe -> timestamp expiración
         self.dialogo_abierto = set()
+        self.iconos = {}          # exe -> PhotoImage (evitar GC)
+        self.rutas_exe = {}       # exe -> ruta completa conocida
 
         self._construir_ui()
         self._cargar_bloqueadas()
@@ -56,15 +74,17 @@ class PanelPrincipal(tk.Frame):
         tk.Label(frame_tabla, text="Aplicaciones restringidas:",
                  font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x", pady=(0, 4))
 
-        cols = ("app", "estado", "expira")
+        cols = ("icono", "app", "estado", "expira")
         self.tabla = ttk.Treeview(frame_tabla, columns=cols,
                                   show="headings", height=12)
+        self.tabla.heading("icono", text="")
         self.tabla.heading("app", text="Aplicación (.exe)")
         self.tabla.heading("estado", text="Estado")
         self.tabla.heading("expira", text="Expira en")
-        self.tabla.column("app", width=220)
+        self.tabla.column("icono", width=30, anchor="center", stretch=False)
+        self.tabla.column("app", width=200)
         self.tabla.column("estado", width=120, anchor="center")
-        self.tabla.column("expira", width=130, anchor="center")
+        self.tabla.column("expira", width=120, anchor="center")
 
         scroll = ttk.Scrollbar(frame_tabla, orient="vertical",
                                command=self.tabla.yview)
@@ -74,7 +94,7 @@ class PanelPrincipal(tk.Frame):
 
         self.tabla.tag_configure("bloqueado", foreground="#c0392b")
         self.tabla.tag_configure("desbloqueado", foreground="#27ae60")
-        self.tabla.tag_configure("expirando", foreground="#e67e22")  # naranja = por expirar
+        self.tabla.tag_configure("expirando", foreground="#e67e22")
 
         btn_frame = tk.Frame(self, padx=14, pady=8)
         btn_frame.pack(fill="x")
@@ -107,8 +127,21 @@ class PanelPrincipal(tk.Frame):
         cfg["apps_bloqueadas"] = self.bloqueadas
         guardar_config(cfg)
 
+    def _obtener_icono(self, exe: str) -> "ImageTk.PhotoImage | None":
+        """Retorna ícono cacheado o intenta obtenerlo."""
+        if exe in self.iconos:
+            return self.iconos[exe]
+        # Buscar ruta si no la tenemos
+        if exe not in self.rutas_exe:
+            self.rutas_exe[exe] = _buscar_ruta_exe(exe)
+        ruta = self.rutas_exe.get(exe, "")
+        icono = obtener_icono_exe(ruta, size=18) if ruta else None
+        if icono:
+            self.iconos[exe] = icono
+        return icono
+
     def _refrescar_tabla(self):
-        # ── FIX: guardar selección antes de limpiar
+        # Guardar selección antes de limpiar
         seleccion = self.tabla.selection()
 
         for row in self.tabla.get_children():
@@ -122,16 +155,24 @@ class PanelPrincipal(tk.Frame):
                 mins, segs = divmod(restante, 60)
                 estado = "🔓 Desbloqueado"
                 expira = f"{mins}m {segs}s"
-                # Naranja si quedan menos de 5 minutos
                 tag = "expirando" if restante <= 300 else "desbloqueado"
             else:
                 estado = "🔒 Bloqueado"
                 expira = "—"
                 tag = "bloqueado"
-            self.tabla.insert("", "end", iid=exe,
-                              values=(exe, estado, expira), tags=(tag,))
 
-        # ── FIX: restaurar selección después de refrescar
+            icono = self._obtener_icono(exe)
+            if icono:
+                self.tabla.insert("", "end", iid=exe,
+                                  image=icono,
+                                  values=("", exe, estado, expira),
+                                  tags=(tag,))
+            else:
+                self.tabla.insert("", "end", iid=exe,
+                                  values=("🔷", exe, estado, expira),
+                                  tags=(tag,))
+
+        # Restaurar selección
         for item in seleccion:
             if self.tabla.exists(item):
                 self.tabla.selection_set(item)
@@ -164,6 +205,7 @@ class PanelPrincipal(tk.Frame):
         if messagebox.askyesno("Confirmar", f"¿Quitar '{exe}' de la lista restringida?"):
             self.bloqueadas.remove(exe)
             self.desbloqueados.pop(exe, None)
+            self.iconos.pop(exe, None)
             self._guardar_bloqueadas()
             self._refrescar_tabla()
 
@@ -180,10 +222,7 @@ class PanelPrincipal(tk.Frame):
                 self.desbloqueados[exe] = time.time() + segundos
                 self._refrescar_tabla()
                 mins = segundos // 60
-                if mins >= 60:
-                    texto = f"{mins // 60}h {mins % 60}min"
-                else:
-                    texto = f"{mins} minutos"
+                texto = f"{mins // 60}h {mins % 60}min" if mins >= 60 else f"{mins} minutos"
                 messagebox.showinfo("Desbloqueado",
                                     f"'{exe}' desbloqueado por {texto}.")
             self.dialogo_abierto.discard(exe)
@@ -192,7 +231,6 @@ class PanelPrincipal(tk.Frame):
                           self.hash_guardado, tras_desbloqueo)
 
     def _mostrar_aviso_expiracion(self, exe: str, mins: int):
-        """Notificación de que quedan pocos minutos de desbloqueo."""
         messagebox.showwarning(
             "⏰ Aviso de expiración",
             f"'{exe}' se bloqueará en aproximadamente {mins} minuto(s).\n\n"

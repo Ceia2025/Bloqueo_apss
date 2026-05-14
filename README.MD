@@ -28,7 +28,7 @@ control_apps/
 ## Requisitos
 
 ```bash
-pip install psutil pystray pillow
+pip install psutil pystray pillow pywin32
 ```
 
 ---
