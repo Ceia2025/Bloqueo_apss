@@ -135,6 +135,17 @@ class PanelPrincipal(tk.Frame):
         self.lbl_info = tk.Label(self,
                  text="ℹ Cerrar esta ventana minimiza a la bandeja. El monitor sigue activo.",
                  font=("Segoe UI", 8), fg=c["fg_gris"], anchor="w")
+        
+        self.lbl_info = tk.Label(self,
+         text="ℹ Cerrar esta ventana minimiza a la bandeja. El monitor sigue activo.",
+         font=("Segoe UI", 8), fg=c["fg_gris"], anchor="w")
+        self.lbl_info.pack(fill="x", padx=14, pady=(0, 2))
+
+        self.lbl_autor = tk.Label(self,
+                text="Desarrollado por: Daniel Scarlazzetta",
+                font=("Segoe UI", 8), fg=c["fg_gris"], anchor="e")
+        self.lbl_autor.pack(fill="x", padx=14, pady=(0, 6))
+        self.lbl_info.pack(fill="x", padx=14, pady=(0, 6))
         self.lbl_info.pack(fill="x", padx=14, pady=(0, 6))
 
     def _actualizar_tags(self):
@@ -156,13 +167,20 @@ class PanelPrincipal(tk.Frame):
         c = T.colores()
         es_oscuro = T.tema_actual() == "oscuro"
 
-        # Actualizar botón tema
+        # Fijar tamaño antes de aplicar tema para evitar que cambie
+        root = self.winfo_toplevel()
+        w = root.winfo_width()
+        h = root.winfo_height()
+        x = root.winfo_x()
+        y = root.winfo_y()
+
         self.btn_tema.config(text="☀️ Modo claro" if es_oscuro else "🌙 Modo oscuro")
 
-        # Aplicar colores a widgets estándar
-        T.aplicar_a_widget(self.winfo_toplevel(), c)
+        T.aplicar_a_widget(root, c)
 
-        # Actualizar widgets con referencias directas
+        # Restaurar dimensiones exactas
+        root.geometry(f"{w}x{h}+{x}+{y}")
+
         self.cab.config(bg=c["cabecera_bg"])
         self.lbl_titulo.config(bg=c["cabecera_bg"], fg=c["cabecera_fg"])
         self.btn_tema.config(bg=c["btn_cambiar"])
@@ -174,7 +192,6 @@ class PanelPrincipal(tk.Frame):
         self.btn_libre.config(bg=c["btn_libre"])
         self.btn_quitar.config(bg=c["btn_quitar"])
 
-        # Actualizar ttk
         T.aplicar_ttk_style()
         self._actualizar_tags()
         self._refrescar_tabla()
