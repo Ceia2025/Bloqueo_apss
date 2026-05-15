@@ -34,8 +34,8 @@ class VentanaContrasena(tk.Toplevel):
         self.e2.grid(row=1, column=1, padx=8)
 
         tk.Button(self, text="Guardar", command=self._guardar,
-                  bg="#0078D4", fg="white", font=("Segoe UI", 10),
-                  relief="flat", padx=20, pady=6).pack(pady=10)
+                  bg="#0078D4", fg="white", font=("Segoe UI", 11),
+                  relief="flat", padx=40, pady=8, width=16).pack(pady=10)
         self.e1.focus()
         self.bind("<Return>", lambda e: self._guardar())
 
@@ -67,18 +67,19 @@ class VentanaContrasena(tk.Toplevel):
 class VentanaLogin(tk.Toplevel):
     """Solicitar contraseña maestra al iniciar."""
 
-    def __init__(self, parent, hash_guardado: str, callback):
+    def __init__(self, parent, hash_guardado: str, callback, cerrar_app: bool = False):
         super().__init__(parent)
         self.hash_guardado = hash_guardado
         self.callback = callback
+        self.cerrar_app = cerrar_app
         self.intentos = 0
         self.title("Control de Aplicaciones — Acceso")
         self.resizable(False, False)
         self.grab_set()
         self.lift()
         self.focus_force()
-        self._centrar(320, 200)
-        self.protocol("WM_DELETE_WINDOW", lambda: self.master.destroy())
+        self._centrar(360, 240)
+        self.protocol("WM_DELETE_WINDOW", self._cancelar)
 
         tk.Label(self, text="🔒 Control de Aplicaciones",
                  font=("Segoe UI", 13, "bold")).pack(pady=(20, 2))
@@ -94,10 +95,17 @@ class VentanaLogin(tk.Toplevel):
         self.lbl_error.pack()
 
         tk.Button(self, text="Entrar", command=self._verificar,
-                  bg="#0078D4", fg="white", font=("Segoe UI", 10),
-                  relief="flat", padx=20, pady=6).pack(pady=6)
+                  bg="#0078D4", fg="white", font=("Segoe UI", 11),
+                  relief="flat", padx=40, pady=8, width=16).pack(pady=10)
         self.entry.focus()
         self.bind("<Return>", lambda e: self._verificar())
+
+    def _cancelar(self):
+        self.destroy()
+        if self.cerrar_app:
+            self.master.destroy()
+        else:
+            self.callback(False)
 
     def _verificar(self):
         if hash_txt(self.entry.get()) == self.hash_guardado:
@@ -111,7 +119,11 @@ class VentanaLogin(tk.Toplevel):
                 self.lbl_error.config(text=f"Contraseña incorrecta. Intentos: {restantes}")
             else:
                 messagebox.showerror("Acceso denegado", "Demasiados intentos. Cerrando.")
-                self.master.destroy()
+                if self.cerrar_app:
+                    self.master.destroy()
+                else:
+                    self.destroy()
+                    self.callback(False)
 
     def _centrar(self, w, h):
         self.update_idletasks()

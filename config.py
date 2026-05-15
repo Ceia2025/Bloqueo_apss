@@ -20,3 +20,13 @@ def cargar_config() -> dict:
 def guardar_config(datos: dict):
     with open(ARCHIVO_CONFIG, "w", encoding="utf-8") as f:
         json.dump(datos, f, ensure_ascii=False, indent=2)
+
+
+def cargar_tema() -> str:
+    return cargar_config().get("tema", "claro")
+
+
+def guardar_tema(nombre: str):
+    cfg = cargar_config()
+    cfg["tema"] = nombre
+    guardar_config(cfg)

@@ -26,7 +26,7 @@ class App(tk.Tk):
         if not hash_guardado:
             VentanaContrasena(self, self._tras_login)
         else:
-            VentanaLogin(self, hash_guardado, self._tras_login)
+            VentanaLogin(self, hash_guardado, self._tras_login, cerrar_app=True)
 
     def _tras_login(self, ok: bool):
         if ok:

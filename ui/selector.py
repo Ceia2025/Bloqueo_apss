@@ -48,7 +48,9 @@ class VentanaSelectorApps(tk.Toplevel):
         super().__init__(parent)
         self.callback      = callback
         self.todas_apps    = []
-        self.bloqueadas    = [b.lower() for b in bloqueadas_actuales]
+        # bloqueadas_actuales es lista de dicts {exe, ruta}
+        self.bloqueadas    = [b["exe"] if isinstance(b, dict) else b
+                              for b in bloqueadas_actuales]
         self.iconos        = {}   # exe -> PhotoImage (evitar GC)
         self.title("Agregar aplicación restringida")
         self.resizable(True, True)
@@ -179,7 +181,7 @@ class VentanaSelectorApps(tk.Toplevel):
         if manual:
             if not manual.lower().endswith(".exe"):
                 manual += ".exe"
-            self.callback(manual.lower())
+            self.callback({"exe": manual.lower(), "ruta": ""})
             self.destroy()
             return
         sel = self.tabla.selection()
@@ -187,7 +189,10 @@ class VentanaSelectorApps(tk.Toplevel):
             messagebox.showwarning("Aviso",
                 "Selecciona una app de la lista o escribe el nombre.", parent=self)
             return
-        self.callback(sel[0])
+        exe = sel[0]
+        # Buscar ruta completa en todas_apps
+        ruta = next((a["ruta"] for a in self.todas_apps if a["exe"] == exe), "")
+        self.callback({"exe": exe, "ruta": ruta})
         self.destroy()
 
     def _centrar(self, w, h):
