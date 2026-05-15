@@ -13,7 +13,7 @@ from ui.selector import VentanaSelectorApps
 
 
 def _buscar_ruta_exe(exe: str) -> str:
-    """Intenta encontrar la ruta completa de un exe buscando en procesos activos."""
+    """Busca la ruta completa de un exe en los procesos activos."""
     for proc in psutil.process_iter(["name", "exe"]):
         try:
             if proc.info["name"].lower() == exe:
@@ -31,11 +31,11 @@ class PanelPrincipal(tk.Frame):
         self.hash_guardado = hash_guardado
         self.pack(fill="both", expand=True)
 
-        self.bloqueadas = []
-        self.desbloqueados = {}   # exe -> timestamp expiración
+        self.bloqueadas    = []
+        self.desbloqueados = {}
         self.dialogo_abierto = set()
-        self.iconos = {}          # exe -> PhotoImage (evitar GC)
-        self.rutas_exe = {}       # exe -> ruta completa conocida
+        self.iconos        = {}   # exe -> PhotoImage
+        self.rutas_exe     = {}   # exe -> ruta completa
 
         self._construir_ui()
         self._cargar_bloqueadas()
@@ -74,17 +74,17 @@ class PanelPrincipal(tk.Frame):
         tk.Label(frame_tabla, text="Aplicaciones restringidas:",
                  font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x", pady=(0, 4))
 
-        cols = ("icono", "app", "estado", "expira")
-        self.tabla = ttk.Treeview(frame_tabla, columns=cols,
-                                  show="headings", height=12)
-        self.tabla.heading("icono", text="")
-        self.tabla.heading("app", text="Aplicación (.exe)")
-        self.tabla.heading("estado", text="Estado")
-        self.tabla.heading("expira", text="Expira en")
-        self.tabla.column("icono", width=30, anchor="center", stretch=False)
-        self.tabla.column("app", width=200)
-        self.tabla.column("estado", width=120, anchor="center")
-        self.tabla.column("expira", width=120, anchor="center")
+        self.tabla = ttk.Treeview(frame_tabla,
+                                  columns=("app", "estado", "expira"),
+                                  show="tree headings", height=12)
+        self.tabla.heading("#0",      text="")
+        self.tabla.heading("app",     text="Aplicación (.exe)")
+        self.tabla.heading("estado",  text="Estado")
+        self.tabla.heading("expira",  text="Expira en")
+        self.tabla.column("#0",       width=28, stretch=False, anchor="center")
+        self.tabla.column("app",      width=195)
+        self.tabla.column("estado",   width=120, anchor="center")
+        self.tabla.column("expira",   width=110, anchor="center")
 
         scroll = ttk.Scrollbar(frame_tabla, orient="vertical",
                                command=self.tabla.yview)
@@ -92,9 +92,9 @@ class PanelPrincipal(tk.Frame):
         self.tabla.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
 
-        self.tabla.tag_configure("bloqueado", foreground="#c0392b")
+        self.tabla.tag_configure("bloqueado",   foreground="#c0392b")
         self.tabla.tag_configure("desbloqueado", foreground="#27ae60")
-        self.tabla.tag_configure("expirando", foreground="#e67e22")
+        self.tabla.tag_configure("expirando",   foreground="#e67e22")
 
         btn_frame = tk.Frame(self, padx=14, pady=8)
         btn_frame.pack(fill="x")
@@ -121,29 +121,39 @@ class PanelPrincipal(tk.Frame):
     def _cargar_bloqueadas(self):
         self.bloqueadas = cargar_config().get("apps_bloqueadas", [])
         self._refrescar_tabla()
+        # Cargar íconos en segundo plano para las apps ya en la lista
+        self._cargar_iconos_lista()
 
     def _guardar_bloqueadas(self):
         cfg = cargar_config()
         cfg["apps_bloqueadas"] = self.bloqueadas
         guardar_config(cfg)
 
-    def _obtener_icono(self, exe: str) -> "ImageTk.PhotoImage | None":
-        """Retorna ícono cacheado o intenta obtenerlo."""
-        if exe in self.iconos:
-            return self.iconos[exe]
-        # Buscar ruta si no la tenemos
-        if exe not in self.rutas_exe:
-            self.rutas_exe[exe] = _buscar_ruta_exe(exe)
-        ruta = self.rutas_exe.get(exe, "")
-        icono = obtener_icono_exe(ruta, size=18) if ruta else None
-        if icono:
-            self.iconos[exe] = icono
-        return icono
+    def _cargar_iconos_lista(self):
+        """Intenta cargar íconos de las apps bloqueadas en segundo plano."""
+        import threading
+
+        def worker():
+            for exe in list(self.bloqueadas):
+                if exe in self.iconos:
+                    continue
+                ruta = self.rutas_exe.get(exe) or _buscar_ruta_exe(exe)
+                if ruta:
+                    self.rutas_exe[exe] = ruta
+                    foto = obtener_icono_exe(ruta, size=16)
+                    if foto:
+                        self.iconos[exe] = foto
+                        # Actualizar fila si existe
+                        self.after(0, self._aplicar_icono_fila, exe, foto)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _aplicar_icono_fila(self, exe: str, foto):
+        if self.tabla.exists(exe):
+            self.tabla.item(exe, image=foto)
 
     def _refrescar_tabla(self):
-        # Guardar selección antes de limpiar
         seleccion = self.tabla.selection()
-
         for row in self.tabla.get_children():
             self.tabla.delete(row)
 
@@ -155,24 +165,20 @@ class PanelPrincipal(tk.Frame):
                 mins, segs = divmod(restante, 60)
                 estado = "🔓 Desbloqueado"
                 expira = f"{mins}m {segs}s"
-                tag = "expirando" if restante <= 300 else "desbloqueado"
+                tag    = "expirando" if restante <= 300 else "desbloqueado"
             else:
                 estado = "🔒 Bloqueado"
                 expira = "—"
-                tag = "bloqueado"
+                tag    = "bloqueado"
 
-            icono = self._obtener_icono(exe)
-            if icono:
-                self.tabla.insert("", "end", iid=exe,
-                                  image=icono,
-                                  values=("", exe, estado, expira),
-                                  tags=(tag,))
+            foto = self.iconos.get(exe)
+            if foto:
+                self.tabla.insert("", "end", iid=exe, image=foto,
+                                  values=(exe, estado, expira), tags=(tag,))
             else:
                 self.tabla.insert("", "end", iid=exe,
-                                  values=("🔷", exe, estado, expira),
-                                  tags=(tag,))
+                                  values=(exe, estado, expira), tags=(tag,))
 
-        # Restaurar selección
         for item in seleccion:
             if self.tabla.exists(item):
                 self.tabla.selection_set(item)
@@ -192,6 +198,7 @@ class PanelPrincipal(tk.Frame):
             self.bloqueadas.append(exe)
             self._guardar_bloqueadas()
             self._refrescar_tabla()
+            self._cargar_iconos_lista()
             messagebox.showinfo("Agregada", f"'{exe}' agregada a la lista restringida.")
         else:
             messagebox.showinfo("Ya existe", f"'{exe}' ya está en la lista.")
@@ -221,7 +228,7 @@ class PanelPrincipal(tk.Frame):
             if segundos > 0:
                 self.desbloqueados[exe] = time.time() + segundos
                 self._refrescar_tabla()
-                mins = segundos // 60
+                mins  = segundos // 60
                 texto = f"{mins // 60}h {mins % 60}min" if mins >= 60 else f"{mins} minutos"
                 messagebox.showinfo("Desbloqueado",
                                     f"'{exe}' desbloqueado por {texto}.")

@@ -1,65 +1,39 @@
 """
 iconos.py
-Extrae el ícono de un archivo .exe y lo convierte en PhotoImage de Tkinter.
-Funciona solo en Windows. En otros sistemas retorna None silenciosamente.
+Extrae íconos de .exe usando win32gui (pywin32).
+Diseñado para lazy loading: carga en segundo plano sin bloquear la UI.
 """
-
-import os
-import tkinter as tk
+import threading
+import win32gui
+import win32ui
+import win32con
 from PIL import Image, ImageTk
 
-# Caché para no extraer el mismo ícono dos veces
-_cache: dict[str, ImageTk.PhotoImage | None] = {}
+# Caché global: ruta -> PhotoImage
+_cache: dict = {}
+_cache_lock = threading.Lock()
 
 
-def obtener_icono_exe(ruta_exe: str, size: int = 20) -> "ImageTk.PhotoImage | None":
-    """
-    Dado el path completo de un .exe, retorna un PhotoImage con su ícono.
-    Si no puede extraerlo, retorna None.
-    
-    Parámetro size: tamaño en píxeles del ícono (default 20 para listas).
-    """
-    if ruta_exe in _cache:
-        return _cache[ruta_exe]
-
-    icono = _extraer_icono(ruta_exe, size)
-    _cache[ruta_exe] = icono
-    return icono
-
-
-def _extraer_icono(ruta_exe: str, size: int) -> "ImageTk.PhotoImage | None":
-    if not ruta_exe or not os.path.exists(ruta_exe):
-        return None
-
-    # Método 1: win32ui (pywin32) — más confiable
+def _hicon_a_photoimage(hicon, size: int) -> "ImageTk.PhotoImage | None":
+    """Convierte un HICON de Windows en PhotoImage de Tkinter."""
     try:
-        import win32ui
-        import win32con
-        import win32gui
-
-        large, small = win32gui.ExtractIconEx(ruta_exe, 0)
-        if not large and not small:
-            return None
-
-        hicon = large[0] if large else small[0]
-
-        # Limpiar íconos no usados
-        for h in large[1:]:
-            win32gui.DestroyIcon(h)
-        for h in small:
-            win32gui.DestroyIcon(h)
-
-        # Dibujar el ícono en un DC
-        hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
-        hbmp = win32ui.CreateBitmap()
+        # Crear DC y bitmap compatibles
+        hdc      = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
+        hdc_mem  = hdc.CreateCompatibleDC()
+        hbmp     = win32ui.CreateBitmap()
         hbmp.CreateCompatibleBitmap(hdc, 32, 32)
-        hdc2 = hdc.CreateCompatibleDC()
-        hdc2.SelectObject(hbmp)
-        hdc2.DrawIcon((0, 0), hicon)
-        win32gui.DestroyIcon(hicon)
+        hdc_mem.SelectObject(hbmp)
 
+        # Fondo blanco
+        hdc_mem.FillSolidRect((0, 0, 32, 32), 0x00FFFFFF)
+
+        # Dibujar ícono
+        win32gui.DrawIconEx(hdc_mem.GetHandleOutput(), 0, 0,
+                            hicon, 32, 32, 0, None, win32con.DI_NORMAL)
+
+        # Convertir a PIL
         bmpinfo = hbmp.GetInfo()
-        bmpstr = hbmp.GetBitmapBits(True)
+        bmpstr  = hbmp.GetBitmapBits(True)
         img = Image.frombuffer(
             "RGBA",
             (bmpinfo["bmWidth"], bmpinfo["bmHeight"]),
@@ -69,24 +43,82 @@ def _extraer_icono(ruta_exe: str, size: int) -> "ImageTk.PhotoImage | None":
         return ImageTk.PhotoImage(img)
 
     except Exception:
-        pass
+        return None
+    finally:
+        try:
+            win32gui.DestroyIcon(hicon)
+        except Exception:
+            pass
 
-    # Método 2: icoextract — más simple pero menos compatible
+
+
+def obtener_icono_exe(ruta: str, size: int = 16) -> "ImageTk.PhotoImage | None":
+    """
+    Extrae el ícono de un .exe y retorna PhotoImage.
+    Usa caché para no repetir extracción.
+    """
+    if not ruta:
+        return None
+
+    clave = f"{ruta}_{size}"
+    with _cache_lock:
+        if clave in _cache:
+            return _cache[clave]
+
     try:
-        import icoextract
+        # Extraer ícono grande (índice 0)
+        large, small = win32gui.ExtractIconEx(ruta, 0)
 
-        extractor = icoextract.IconExtractor(ruta_exe)
-        data = extractor.get_icon()
-        if data:
-            img = Image.open(data)
-            img = img.resize((size, size), Image.LANCZOS)
-            return ImageTk.PhotoImage(img)
+        hicon = None
+        if large:
+            hicon = large[0]
+            # Destruir los que no usamos
+            for h in large[1:]:
+                win32gui.DestroyIcon(h)
+        if small:
+            for h in small:
+                if hicon and h != hicon:
+                    win32gui.DestroyIcon(h)
+                elif not hicon:
+                    hicon = h
+
+        if not hicon:
+            return None
+
+        foto = _hicon_a_photoimage(hicon, size)
+
+        with _cache_lock:
+            _cache[clave] = foto
+
+        return foto
+
     except Exception:
-        pass
+        return None
 
-    return None
+
+def lazy_load_iconos(apps: list, size: int, callback_ui):
+    """
+    Carga íconos en segundo plano de a uno (lazy loading).
+    Por cada ícono listo llama callback_ui(exe, PhotoImage) en el hilo de fondo.
+    El caller debe usar .after(0, ...) para actualizar la UI desde el hilo principal.
+
+    apps        → lista de dicts con 'exe' y 'ruta'
+    size        → tamaño en píxeles
+    callback_ui → función(exe, foto) que se llama cuando el ícono está listo
+    """
+    def worker():
+        for app in apps:
+            ruta = app.get("ruta", "")
+            exe  = app.get("exe", "")
+            if not ruta or not exe:
+                continue
+            foto = obtener_icono_exe(ruta, size)
+            if foto:
+                callback_ui(exe, foto)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def limpiar_cache():
-    """Limpia el caché de íconos (libera memoria)."""
-    _cache.clear()
+    with _cache_lock:
+        _cache.clear()
